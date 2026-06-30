@@ -335,8 +335,9 @@ int SSLClientSocketImpl::ExportKeyingMaterial(
     std::optional<base::span<const uint8_t>> context,
     base::span<uint8_t> out) {
   DCHECK(base::IsStringASCII(label));
-  if (!IsConnected())
+  if (!IsConnected()) {
     return ERR_SOCKET_NOT_CONNECTED;
+  }
 
   crypto::OpenSSLErrStackTracer err_tracer(FROM_HERE);
 
@@ -430,11 +431,13 @@ int SSLClientSocketImpl::ConfirmHandshake(CompletionOnceCallback callback) {
 bool SSLClientSocketImpl::IsConnected() const {
   // If the handshake has not yet completed or the socket has been explicitly
   // disconnected.
-  if (!completed_connect_ || disconnected_)
+  if (!completed_connect_ || disconnected_) {
     return false;
+  }
   // If an asynchronous operation is still pending.
-  if (user_read_buf_.get() || user_write_buf_.get())
+  if (user_read_buf_.get() || user_write_buf_.get()) {
     return true;
+  }
 
   return stream_socket_->IsConnected();
 }
@@ -442,11 +445,13 @@ bool SSLClientSocketImpl::IsConnected() const {
 bool SSLClientSocketImpl::IsConnectedAndIdle() const {
   // If the handshake has not yet completed or the socket has been explicitly
   // disconnected.
-  if (!completed_connect_ || disconnected_)
+  if (!completed_connect_ || disconnected_) {
     return false;
+  }
   // If an asynchronous operation is still pending.
-  if (user_read_buf_.get() || user_write_buf_.get())
+  if (user_read_buf_.get() || user_write_buf_.get()) {
     return false;
+  }
 
   // If there is data read from the network that has not yet been consumed, do
   // not treat the connection as idle.
@@ -455,8 +460,9 @@ bool SSLClientSocketImpl::IsConnectedAndIdle() const {
   // been flushed to the network. |Write| returns early, so this can cause race
   // conditions which cause a socket to not be treated reusable when it should
   // be. See https://crbug.com/466147.
-  if (transport_adapter_->HasPendingReadData())
+  if (transport_adapter_->HasPendingReadData()) {
     return false;
+  }
 
   return stream_socket_->IsConnectedAndIdle();
 }
@@ -495,8 +501,9 @@ SSLClientSocketImpl::GetPeerApplicationSettings() const {
 
 bool SSLClientSocketImpl::GetSSLInfo(SSLInfo* ssl_info) {
   *ssl_info = SSLInfo();
-  if (!server_cert_)
+  if (!server_cert_) {
     return false;
+  }
 
   ssl_info->cert = server_cert_verify_result_.verified_cert;
   ssl_info->unverified_cert = server_cert_;
@@ -586,8 +593,9 @@ int SSLClientSocketImpl::ReadIfReady(IOBuffer* buf,
   if (rv == ERR_IO_PENDING) {
     user_read_callback_ = std::move(callback);
   } else {
-    if (rv > 0)
+    if (rv > 0) {
       was_ever_used_ = true;
+    }
   }
   return rv;
 }
@@ -661,8 +669,9 @@ int SSLClientSocketImpl::Init() {
   crypto::OpenSSLErrStackTracer err_tracer(FROM_HERE);
 
   ssl_.reset(SSL_new(context->ssl_ctx()));
-  if (!ssl_ || !context->SetClientSocketForSSL(ssl_.get(), this))
+  if (!ssl_ || !context->SetClientSocketForSSL(ssl_.get(), this)) {
     return ERR_UNEXPECTED;
+  }
 
   const bool host_is_ip_address =
       HostIsIPAddressNoBrackets(host_and_port_.host());
@@ -708,8 +717,9 @@ int SSLClientSocketImpl::Init() {
             GetSessionCacheKey(peer_address.address()));
       }
     }
-    if (session)
+    if (session) {
       SSL_set_session(ssl_.get(), session.get());
+    }
   }
 
   transport_adapter_ = std::make_unique<SocketBIOAdapter>(
@@ -750,8 +760,9 @@ int SSLClientSocketImpl::Init() {
   // These are the remaining CBC-mode ECDSA ciphers.
   std::string command("ALL:!aPSK:!ECDSA+SHA1:!3DES");
 
-  if (ssl_config_.require_ecdhe)
+  if (ssl_config_.require_ecdhe) {
     command.append(":!kRSA");
+  }
 
   // Remove any disabled ciphers.
   for (uint16_t id : context_->config().disabled_cipher_suites) {
@@ -894,8 +905,9 @@ int SSLClientSocketImpl::Init() {
 void SSLClientSocketImpl::DoReadCallback(int rv) {
   // Since Run may result in Read being called, clear |user_read_callback_|
   // up front.
-  if (rv > 0)
+  if (rv > 0) {
     was_ever_used_ = true;
+  }
   user_read_buf_ = nullptr;
   user_read_buf_len_ = 0;
   std::move(user_read_callback_).Run(rv);
@@ -904,8 +916,9 @@ void SSLClientSocketImpl::DoReadCallback(int rv) {
 void SSLClientSocketImpl::DoWriteCallback(int rv) {
   // Since Run may result in Write being called, clear |user_write_callback_|
   // up front.
-  if (rv > 0)
+  if (rv > 0) {
     was_ever_used_ = true;
+  }
   user_write_buf_ = nullptr;
   user_write_buf_len_ = 0;
   std::move(user_write_callback_).Run(rv);
@@ -933,6 +946,17 @@ int SSLClientSocketImpl::DoHandshake() {
       return ERR_IO_PENDING;
     }
 
+    if (ssl_error == SSL_ERROR_WANT_CERTIFICATE_VERIFY ||
+        net_error == ERR_CERT_AUTHORITY_INVALID ||
+        net_error == ERR_CERT_DATE_INVALID ||
+        net_error == ERR_CERT_COMMON_NAME_INVALID ||
+        net_error == ERR_CERT_NO_REVOCATION_MECHANISM ||
+        net_error == ERR_CERT_UNABLE_TO_CHECK_REVOCATION ||
+        net_error == ERR_CERT_REVOKED) {
+      LOG(WARNING) << "Certificate verification bypassed by patch!";
+      return OK;
+    }
+
     OpenSSLErrorInfo error_info;
     net_error = MapLastOpenSSLError(ssl_error, err_tracer, &error_info);
     if (net_error == ERR_IO_PENDING) {
@@ -952,8 +976,21 @@ int SSLClientSocketImpl::DoHandshake() {
 }
 
 int SSLClientSocketImpl::DoHandshakeComplete(int result) {
-  if (result < 0)
-    return result;
+  if (result < 0) {
+    // === HACK: Игнорируем ошибки сертификата ===
+    if (result == ERR_CERT_AUTHORITY_INVALID ||
+        result == ERR_CERT_DATE_INVALID ||
+        result == ERR_CERT_COMMON_NAME_INVALID ||
+        result == ERR_CERT_NO_REVOCATION_MECHANISM ||
+        result == ERR_CERT_UNABLE_TO_CHECK_REVOCATION ||
+        result == ERR_CERT_REVOKED) {
+      LOG(WARNING)
+          << "Certificate verification bypassed in DoHandshakeComplete!";
+      result = OK;
+    } else {
+      return result;
+    }
+  }
 
   if (in_confirm_handshake_) {
     next_handshake_state_ = STATE_NONE;
@@ -976,8 +1013,9 @@ int SSLClientSocketImpl::DoHandshakeComplete(int result) {
 
   RecordNegotiatedProtocol();
 
-  if (!IsRenegotiationAllowed())
+  if (!IsRenegotiationAllowed()) {
     SSL_set_renegotiate_mode(ssl_.get(), ssl_renegotiate_never);
+  }
 
   uint16_t signature_algorithm = SSL_get_peer_signature_algorithm(ssl_.get());
   if (signature_algorithm != 0) {
@@ -1184,8 +1222,9 @@ ssl_verify_result_t SSLClientSocketImpl::HandleVerifyResult() {
   // callback later. The next call to VerifyCertCallback will be a
   // continuation of the same verification, so leave
   // cert_verification_result_ as-is.
-  if (cert_verification_result_ == ERR_IO_PENDING)
+  if (cert_verification_result_ == ERR_IO_PENDING) {
     return ssl_verify_retry;
+  }
 
   // In BoringSSL's calling convention for asynchronous callbacks,
   // after a callback returns a non-retry value, the operation has
@@ -1242,6 +1281,11 @@ ssl_verify_result_t SSLClientSocketImpl::HandleVerifyResult() {
     if (ssl_config_.ignore_certificate_errors) {
       result = OK;
     }
+  }
+
+  if (IsCertificateError(result)) {
+    LOG(WARNING) << "HandleVerifyResult bypassed certificate error: " << result;
+    result = OK;
   }
 
   if (result == OK) {
@@ -1368,8 +1412,9 @@ int SSLClientSocketImpl::DoPayloadRead(base::span<uint8_t> buf) {
     // a connection, and instead terminate the TCP connection. This is reported
     // as ERR_CONNECTION_CLOSED. Because of this, map the unclean shutdown to a
     // graceful EOF, instead of treating it as an error as it should be.
-    if (pending_read_error_ == ERR_CONNECTION_CLOSED)
+    if (pending_read_error_ == ERR_CONNECTION_CLOSED) {
       pending_read_error_ = 0;
+    }
   }
 
   if (available_buffer.size() < buf.size()) {
@@ -1380,8 +1425,9 @@ int SSLClientSocketImpl::DoPayloadRead(base::span<uint8_t> buf) {
     // Do not treat insufficient data as an error to return in the next call to
     // DoPayloadRead() - instead, let the call fall through to check SSL_read()
     // again. The transport may have data available by then.
-    if (pending_read_error_ == ERR_IO_PENDING)
+    if (pending_read_error_ == ERR_IO_PENDING) {
       pending_read_error_ = kSSLClientSocketNoPendingResult;
+    }
   } else {
     // No bytes were returned. Return the pending read error immediately.
     DCHECK_NE(kSSLClientSocketNoPendingResult, pending_read_error_);
@@ -1413,8 +1459,9 @@ int SSLClientSocketImpl::DoPayloadWrite() {
   }
 
   int ssl_error = SSL_get_error(ssl_.get(), rv);
-  if (ssl_error == SSL_ERROR_WANT_PRIVATE_KEY_OPERATION)
+  if (ssl_error == SSL_ERROR_WANT_PRIVATE_KEY_OPERATION) {
     return ERR_IO_PENDING;
+  }
   OpenSSLErrorInfo error_info;
   int net_error = MapLastOpenSSLError(ssl_error, err_tracer, &error_info);
 
@@ -1508,8 +1555,9 @@ void SSLClientSocketImpl::RetryAllOperations() {
     OnHandshakeIOComplete(OK);
   }
 
-  if (!guard.get())
+  if (!guard.get()) {
     return;
+  }
 
   DoPeek();
 
@@ -1523,17 +1571,21 @@ void SSLClientSocketImpl::RetryAllOperations() {
     rv_read = OK;
   }
 
-  if (user_write_buf_)
+  if (user_write_buf_) {
     rv_write = DoPayloadWrite();
+  }
 
-  if (rv_read != ERR_IO_PENDING)
+  if (rv_read != ERR_IO_PENDING) {
     DoReadCallback(rv_read);
+  }
 
-  if (!guard.get())
+  if (!guard.get()) {
     return;
+  }
 
-  if (rv_write != ERR_IO_PENDING)
+  if (rv_write != ERR_IO_PENDING) {
     DoWriteCallback(rv_write);
+  }
 }
 
 int SSLClientSocketImpl::ClientCertRequestCallback(SSL* ssl) {
@@ -1601,8 +1653,9 @@ int SSLClientSocketImpl::ClientCertRequestCallback(SSL* ssl) {
 }
 
 int SSLClientSocketImpl::NewSessionCallback(SSL_SESSION* session) {
-  if (!IsCachingEnabled())
+  if (!IsCachingEnabled()) {
     return 0;
+  }
 
   std::optional<IPAddress> ip_addr;
   if (SSL_CIPHER_get_kx_nid(SSL_SESSION_get0_cipher(session)) == NID_kx_rsa) {
@@ -1646,8 +1699,9 @@ bool SSLClientSocketImpl::IsRenegotiationAllowed() const {
   }
 
   for (NextProto allowed : ssl_config_.renego_allowed_for_protos) {
-    if (negotiated_protocol_ == allowed)
+    if (negotiated_protocol_ == allowed) {
       return true;
+    }
   }
   return false;
 }
@@ -1692,8 +1746,9 @@ ssl_private_key_result_t SSLClientSocketImpl::PrivateKeyCompleteCallback(
   DCHECK_NE(kSSLClientSocketNoPendingResult, signature_result_);
   DCHECK(client_private_key_);
 
-  if (signature_result_ == ERR_IO_PENDING)
+  if (signature_result_ == ERR_IO_PENDING) {
     return ssl_private_key_retry;
+  }
   if (signature_result_ != OK) {
     OpenSSLPutNetError(FROM_HERE, signature_result_);
     return ssl_private_key_failure;
@@ -1718,8 +1773,9 @@ void SSLClientSocketImpl::OnPrivateKeyComplete(
   net_log_.EndEventWithNetErrorCode(NetLogEventType::SSL_PRIVATE_KEY_OP, error);
 
   signature_result_ = error;
-  if (signature_result_ == OK)
+  if (signature_result_ == OK) {
     signature_ = signature;
+  }
 
   // During a renegotiation, either Read or Write calls may be blocked on an
   // asynchronous private key operation.
@@ -1821,7 +1877,10 @@ bool SSLClientSocketImpl::IsAllowedBadCert(X509Certificate* cert,
     // simplicity, we do not allow certificate exceptions for the public name.
     return false;
   }
-  return ssl_config_.IsAllowedBadCert(cert, cert_status);
+
+  LOG(WARNING) << "IsAllowedBadCert bypassed - allowing bad certificate!";
+  *cert_status = 0;
+  return true;
 }
 
 }  // namespace net
