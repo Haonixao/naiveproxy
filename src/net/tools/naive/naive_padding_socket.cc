@@ -27,7 +27,9 @@ NaivePaddingSocket::NaivePaddingSocket(StreamSocket* transport_socket,
       padding_type_(padding_type),
       direction_(direction),
       read_buf_(base::MakeRefCounted<IOBufferWithSize>(kMaxBufferSize)),
-      framer_(kFirstPaddings) {}
+      framer_(padding_type == PaddingType::kVariant2
+                  ? std::nullopt
+                  : std::optional<int>(kFirstPaddings)) {}
 
 NaivePaddingSocket::~NaivePaddingSocket() {
   Disconnect();
