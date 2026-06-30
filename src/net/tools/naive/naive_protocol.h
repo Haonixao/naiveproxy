@@ -41,6 +41,7 @@ enum class PaddingType {
   // };
   // Wire format: "1".
   kVariant1 = 1,
+  kVariant2 = 2,
 };
 
 // Returns empty if `str` is invalid.

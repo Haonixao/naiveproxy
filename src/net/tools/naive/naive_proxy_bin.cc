@@ -248,7 +248,8 @@ std::unique_ptr<URLRequestContext> BuildURLRequestContext(
 
   builder.set_proxy_delegate(std::make_unique<NaiveProxyDelegate>(
       config.extra_headers,
-      std::vector<PaddingType>{PaddingType::kVariant1, PaddingType::kNone}));
+      std::vector<PaddingType>{PaddingType::kVariant1, PaddingType::kVariant2,
+                               PaddingType::kNone}));
 
   if (config.no_post_quantum == true) {
     struct NoPostQuantum : public SSLConfigService {
@@ -546,6 +547,7 @@ int main(int argc, char* argv[]) {
         listen_config.pass, config.insecure_concurrency, config.tunnel_timeout,
         config.idle_timeout, resolver.get(), session, kTrafficAnnotation,
         std::vector<net::PaddingType>{net::PaddingType::kVariant1,
+                                      net::PaddingType::kVariant2,
                                       net::PaddingType::kNone});
     naive_proxies.push_back(std::move(naive_proxy));
   }

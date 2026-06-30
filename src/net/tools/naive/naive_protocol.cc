@@ -26,6 +26,8 @@ std::optional<PaddingType> ParsePaddingType(std::string_view str) {
     return PaddingType::kNone;
   } else if (str == "1") {
     return PaddingType::kVariant1;
+  } else if (str == "2") {
+    return PaddingType::kVariant2;
   } else {
     return std::nullopt;
   }
@@ -37,6 +39,8 @@ const char* ToString(PaddingType value) {
       return "0";
     case PaddingType::kVariant1:
       return "1";
+    case PaddingType::kVariant2:
+      return "2";
     default:
       return "";
   }
@@ -48,6 +52,8 @@ const char* ToReadableString(PaddingType value) {
       return "None";
     case PaddingType::kVariant1:
       return "Variant1";
+    case PaddingType::kVariant2:
+      return "Variant2";
     default:
       return "";
   }

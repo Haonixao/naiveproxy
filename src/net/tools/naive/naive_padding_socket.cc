@@ -51,6 +51,8 @@ int NaivePaddingSocket::Read(IOBuffer* buf,
       } else {
         return ReadNoPadding(buf, buf_len, std::move(callback));
       }
+    case PaddingType::kVariant2:
+      return ReadPaddingV1(buf, buf_len, std::move(callback));
     default:
       NOTREACHED();
   }
@@ -156,6 +158,9 @@ int NaivePaddingSocket::Write(
         return WriteNoPadding(buf, buf_len, std::move(callback),
                               traffic_annotation);
       }
+    case PaddingType::kVariant2:
+      return WritePaddingV1(buf, buf_len, std::move(callback),
+                            traffic_annotation);
     default:
       NOTREACHED();
   }
