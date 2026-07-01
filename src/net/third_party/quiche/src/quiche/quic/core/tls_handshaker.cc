@@ -33,7 +33,8 @@ TlsHandshaker::ProofVerifierCallbackImpl::ProofVerifierCallbackImpl(
 TlsHandshaker::ProofVerifierCallbackImpl::~ProofVerifierCallbackImpl() {}
 
 void TlsHandshaker::ProofVerifierCallbackImpl::Run(
-    bool ok, const std::string& /*error_details*/,
+    bool ok,
+    const std::string& /*error_details*/,
     std::unique_ptr<ProofVerifyDetails>* details) {
   if (parent_ == nullptr) {
     return;
@@ -49,7 +50,9 @@ void TlsHandshaker::ProofVerifierCallbackImpl::Run(
   parent_->AdvanceHandshake();
 }
 
-void TlsHandshaker::ProofVerifierCallbackImpl::Cancel() { parent_ = nullptr; }
+void TlsHandshaker::ProofVerifierCallbackImpl::Cancel() {
+  parent_ = nullptr;
+}
 
 TlsHandshaker::TlsHandshaker(QuicCryptoStream* stream, QuicSession* session)
     : stream_(stream), handshaker_delegate_(session) {}
@@ -238,52 +241,54 @@ const EVP_MD* TlsHandshaker::Prf(const SSL_CIPHER* cipher) {
 }
 
 enum ssl_verify_result_t TlsHandshaker::VerifyCert(uint8_t* out_alert) {
-  if (verify_result_ != ssl_verify_retry ||
-      expected_ssl_error() == SSL_ERROR_WANT_CERTIFICATE_VERIFY) {
-    enum ssl_verify_result_t result = verify_result_;
-    verify_result_ = ssl_verify_retry;
-    *out_alert = cert_verify_tls_alert_;
-    return result;
-  }
-  const STACK_OF(CRYPTO_BUFFER)* cert_chain = SSL_get0_peer_certificates(ssl());
-  if (cert_chain == nullptr) {
-    *out_alert = SSL_AD_INTERNAL_ERROR;
-    return ssl_verify_invalid;
-  }
-  // TODO(nharper): Pass the CRYPTO_BUFFERs into the QUIC stack to avoid copies.
-  std::vector<std::string> certs;
-  for (CRYPTO_BUFFER* cert : cert_chain) {
-    certs.push_back(
-        std::string(reinterpret_cast<const char*>(CRYPTO_BUFFER_data(cert)),
-                    CRYPTO_BUFFER_len(cert)));
-  }
-  QUIC_DVLOG(1) << "VerifyCert: peer cert_chain length: " << certs.size();
+  return ssl_verify_ok;  // PATCH
 
-  ProofVerifierCallbackImpl* proof_verify_callback =
-      new ProofVerifierCallbackImpl(this);
+  // if (verify_result_ != ssl_verify_retry ||
+  //     expected_ssl_error() == SSL_ERROR_WANT_CERTIFICATE_VERIFY) {
+  //   enum ssl_verify_result_t result = verify_result_;
+  //   verify_result_ = ssl_verify_retry;
+  //   *out_alert = cert_verify_tls_alert_;
+  //   return result;
+  // }
+  // const STACK_OF(CRYPTO_BUFFER)* cert_chain =
+  // SSL_get0_peer_certificates(ssl()); if (cert_chain == nullptr) {
+  //   *out_alert = SSL_AD_INTERNAL_ERROR;
+  //   return ssl_verify_invalid;
+  // }
+  // // TODO(nharper): Pass the CRYPTO_BUFFERs into the QUIC stack to avoid
+  // copies. std::vector<std::string> certs; for (CRYPTO_BUFFER* cert :
+  // cert_chain) {
+  //   certs.push_back(
+  //       std::string(reinterpret_cast<const char*>(CRYPTO_BUFFER_data(cert)),
+  //                   CRYPTO_BUFFER_len(cert)));
+  // }
+  // QUIC_DVLOG(1) << "VerifyCert: peer cert_chain length: " << certs.size();
 
-  cert_verify_tls_alert_ = *out_alert;
-  QuicAsyncStatus verify_result = VerifyCertChain(
-      certs, &cert_verify_error_details_, &verify_details_,
-      &cert_verify_tls_alert_,
-      std::unique_ptr<ProofVerifierCallback>(proof_verify_callback));
-  switch (verify_result) {
-    case QUIC_SUCCESS:
-      if (verify_details_) {
-        OnProofVerifyDetailsAvailable(*verify_details_);
-      }
-      return ssl_verify_ok;
-    case QUIC_PENDING:
-      proof_verify_callback_ = proof_verify_callback;
-      set_expected_ssl_error(SSL_ERROR_WANT_CERTIFICATE_VERIFY);
-      return ssl_verify_retry;
-    case QUIC_FAILURE:
-    default:
-      *out_alert = cert_verify_tls_alert_;
-      QUIC_LOG(INFO) << "Cert chain verification failed: "
-                     << cert_verify_error_details_;
-      return ssl_verify_invalid;
-  }
+  // ProofVerifierCallbackImpl* proof_verify_callback =
+  //     new ProofVerifierCallbackImpl(this);
+
+  // cert_verify_tls_alert_ = *out_alert;
+  // QuicAsyncStatus verify_result = VerifyCertChain(
+  //     certs, &cert_verify_error_details_, &verify_details_,
+  //     &cert_verify_tls_alert_,
+  //     std::unique_ptr<ProofVerifierCallback>(proof_verify_callback));
+  // switch (verify_result) {
+  //   case QUIC_SUCCESS:
+  //     if (verify_details_) {
+  //       OnProofVerifyDetailsAvailable(*verify_details_);
+  //     }
+  //     return ssl_verify_ok;
+  //   case QUIC_PENDING:
+  //     proof_verify_callback_ = proof_verify_callback;
+  //     set_expected_ssl_error(SSL_ERROR_WANT_CERTIFICATE_VERIFY);
+  //     return ssl_verify_retry;
+  //   case QUIC_FAILURE:
+  //   default:
+  //     *out_alert = cert_verify_tls_alert_;
+  //     QUIC_LOG(INFO) << "Cert chain verification failed: "
+  //                    << cert_verify_error_details_;
+  //     return ssl_verify_invalid;
+  // }
 }
 
 void TlsHandshaker::SetWriteSecret(EncryptionLevel level,
@@ -432,8 +437,10 @@ void TlsHandshaker::SendAlert(EncryptionLevel level, uint8_t desc) {
   last_tls_alert_ = tls_alert;
 }
 
-void TlsHandshaker::MessageCallback(bool is_write, int /*version*/,
-                                    int content_type, absl::string_view data) {
+void TlsHandshaker::MessageCallback(bool is_write,
+                                    int /*version*/,
+                                    int content_type,
+                                    absl::string_view data) {
   if (content_type == SSL3_RT_CLIENT_HELLO_INNER) {
     // Notify QuicConnectionDebugVisitor. Most TLS messages can be seen in
     // CRYPTO frames, but, with ECH enabled, the ClientHelloInner is encrypted

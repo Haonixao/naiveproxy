@@ -2,7 +2,6 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-
 #include "net/quic/crypto/proof_verifier_chromium.h"
 
 #include <string_view>
@@ -227,8 +226,9 @@ quic::QuicAsyncStatus ProofVerifierChromium::Job::VerifyProof(
   verify_details_ = std::make_unique<ProofVerifyDetailsChromium>();
 
   // Converts |certs| to |cert_|.
-  if (!GetX509Certificate(certs, error_details, verify_details))
+  if (!GetX509Certificate(certs, error_details, verify_details)) {
     return quic::QUIC_FAILURE;
+  }
 
   // We call VerifySignature first to avoid copying of server_config and
   // signature.
@@ -269,8 +269,9 @@ quic::QuicAsyncStatus ProofVerifierChromium::Job::VerifyCertChain(
   verify_details_ = std::make_unique<ProofVerifyDetailsChromium>();
 
   // Converts |certs| to |cert_|.
-  if (!GetX509Certificate(certs, error_details, verify_details))
+  if (!GetX509Certificate(certs, error_details, verify_details)) {
     return quic::QUIC_FAILURE;
+  }
 
   return VerifyCert(hostname, port, ocsp_response, cert_sct, error_details,
                     verify_details, std::move(callback));
@@ -371,13 +372,15 @@ void ProofVerifierChromium::Job::OnIOComplete(int result) {
 int ProofVerifierChromium::Job::DoVerifyCert(int result) {
   next_state_ = STATE_VERIFY_CERT_COMPLETE;
 
-  return verifier_->Verify(
-      CertVerifier::RequestParams(cert_, hostname_, cert_verify_flags_,
-                                  ocsp_response_, cert_sct_),
-      &verify_details_->cert_verify_result,
-      base::BindOnce(&ProofVerifierChromium::Job::OnIOComplete,
-                     base::Unretained(this)),
-      &cert_verifier_request_, net_log_);
+  return OK;
+
+  // return verifier_->Verify(
+  //     CertVerifier::RequestParams(cert_, hostname_, cert_verify_flags_,
+  //                                 ocsp_response_, cert_sct_),
+  //     &verify_details_->cert_verify_result,
+  //     base::BindOnce(&ProofVerifierChromium::Job::OnIOComplete,
+  //                    base::Unretained(this)),
+  //     &cert_verifier_request_, net_log_);
 }
 
 bool ProofVerifierChromium::Job::ShouldAllowUnknownRootForHost(
@@ -389,63 +392,68 @@ bool ProofVerifierChromium::Job::ShouldAllowUnknownRootForHost(
 }
 
 int ProofVerifierChromium::Job::DoVerifyCertComplete(int result) {
-  base::UmaHistogramSparse("Net.QuicSession.CertVerificationResult", -result);
-  verify_details_->cert_verify_net_error_for_metrics_only = result;
-  cert_verifier_request_.reset();
+  // PATCH: skip cert verification for QUIC
+  verify_details_->cert_verify_result.cert_status = 0;
+  verify_details_->is_fatal_cert_error = false;
+  return OK;
 
-  const CertVerifyResult& cert_verify_result =
-      verify_details_->cert_verify_result;
-  const CertStatus cert_status = cert_verify_result.cert_status;
+  // base::UmaHistogramSparse("Net.QuicSession.CertVerificationResult",
+  // -result); verify_details_->cert_verify_net_error_for_metrics_only = result;
+  // cert_verifier_request_.reset();
 
-  // If the connection was good or failed with a CT error, check HPKP
-  // and prefer to treat the HPKP error as more serious, if there are both.
-  if (result == OK || result == ERR_CERTIFICATE_TRANSPARENCY_REQUIRED) {
-    if (sct_auditing_delegate_) {
-      sct_auditing_delegate_->MaybeEnqueueReport(
-          HostPortPair(hostname_, port_),
-          cert_verify_result.verified_cert.get(), cert_verify_result.scts);
-    }
+  // const CertVerifyResult& cert_verify_result =
+  //     verify_details_->cert_verify_result;
+  // const CertStatus cert_status = cert_verify_result.cert_status;
 
-    TransportSecurityState::PKPStatus pin_validity =
-        transport_security_state_->CheckPublicKeyPins(
-            hostname_, cert_verify_result.is_issued_by_known_root,
-            cert_verify_result.public_key_hashes);
-    switch (pin_validity) {
-      case TransportSecurityState::PKPStatus::VIOLATED:
-        result = ERR_SSL_PINNED_KEY_NOT_IN_CERT_CHAIN;
-        verify_details_->cert_verify_result.cert_status |=
-            CERT_STATUS_PINNED_KEY_MISSING;
-        break;
-      case TransportSecurityState::PKPStatus::BYPASSED:
-        verify_details_->pkp_bypassed = true;
-        [[fallthrough]];
-      case TransportSecurityState::PKPStatus::OK:
-        // Do nothing.
-        break;
-    }
-  }
+  // // If the connection was good or failed with a CT error, check HPKP
+  // // and prefer to treat the HPKP error as more serious, if there are both.
+  // if (result == OK || result == ERR_CERTIFICATE_TRANSPARENCY_REQUIRED) {
+  //   if (sct_auditing_delegate_) {
+  //     sct_auditing_delegate_->MaybeEnqueueReport(
+  //         HostPortPair(hostname_, port_),
+  //         cert_verify_result.verified_cert.get(), cert_verify_result.scts);
+  //   }
 
-  if (result == OK &&
-      !verify_details_->cert_verify_result.is_issued_by_known_root &&
-      !ShouldAllowUnknownRootForHost(hostname_)) {
-    result = ERR_QUIC_CERT_ROOT_NOT_KNOWN;
-  }
+  //   TransportSecurityState::PKPStatus pin_validity =
+  //       transport_security_state_->CheckPublicKeyPins(
+  //           hostname_, cert_verify_result.is_issued_by_known_root,
+  //           cert_verify_result.public_key_hashes);
+  //   switch (pin_validity) {
+  //     case TransportSecurityState::PKPStatus::VIOLATED:
+  //       result = ERR_SSL_PINNED_KEY_NOT_IN_CERT_CHAIN;
+  //       verify_details_->cert_verify_result.cert_status |=
+  //           CERT_STATUS_PINNED_KEY_MISSING;
+  //       break;
+  //     case TransportSecurityState::PKPStatus::BYPASSED:
+  //       verify_details_->pkp_bypassed = true;
+  //       [[fallthrough]];
+  //     case TransportSecurityState::PKPStatus::OK:
+  //       // Do nothing.
+  //       break;
+  //   }
+  // }
 
-  verify_details_->is_fatal_cert_error =
-      IsCertStatusError(cert_status) &&
-      result != ERR_CERT_KNOWN_INTERCEPTION_BLOCKED &&
-      transport_security_state_->ShouldSSLErrorsBeFatal(hostname_);
+  // if (result == OK &&
+  //     !verify_details_->cert_verify_result.is_issued_by_known_root &&
+  //     !ShouldAllowUnknownRootForHost(hostname_)) {
+  //   result = ERR_QUIC_CERT_ROOT_NOT_KNOWN;
+  // }
 
-  if (result != OK) {
-    std::string error_string = ErrorToString(result);
-    error_details_ = StringPrintf("Failed to verify certificate chain: %s",
-                                  error_string.c_str());
-    DLOG(WARNING) << error_details_;
-  }
+  // verify_details_->is_fatal_cert_error =
+  //     IsCertStatusError(cert_status) &&
+  //     result != ERR_CERT_KNOWN_INTERCEPTION_BLOCKED &&
+  //     transport_security_state_->ShouldSSLErrorsBeFatal(hostname_);
 
-  // Exit DoLoop and return the result to the caller to VerifyProof.
-  DCHECK_EQ(STATE_NONE, next_state_);
-  return result;
+  // if (result != OK) {
+  //   std::string error_string = ErrorToString(result);
+  //   error_details_ = StringPrintf("Failed to verify certificate chain: %s",
+  //                                 error_string.c_str());
+  //   DLOG(WARNING) << error_details_;
+  // }
+
+  // // Exit DoLoop and return the result to the caller to VerifyProof.
+  // DCHECK_EQ(STATE_NONE, next_state_);
+  // return result;
 }
 
 bool ProofVerifierChromium::Job::VerifySignature(
