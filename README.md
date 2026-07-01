@@ -1,4 +1,74 @@
-# NaïveProxy ![build workflow](https://github.com/klzgrad/naiveproxy/actions/workflows/build.yml/badge.svg)
+# NaïveProxy — форк [Haonixao](https://github.com/Haonixao/naiveproxy)
+
+> Форк [klzgrad/naiveproxy](https://github.com/klzgrad/naiveproxy) для работы в связке с [Naive Server](https://github.com/Haonixao/naive-server) в **Stealth Mode**. Оригинальное описание проекта — ниже, после разделителя.
+
+## Отличия от upstream
+
+Этот форк добавляет две группы изменений поверх официального клиента. Они **не** входят в `klzgrad/naiveproxy` и нужны для stealth-сценария с самоподписанными сертификатами и расширенным паддингом.
+
+### 1. Отключена проверка TLS-сертификатов (TCP и QUIC)
+
+Официальный NaïveProxy, как и Chromium, отклоняет соединения с недоверенными, самоподписанными или невалидными по сроку сертификатами. В stealth-режиме Naive Server отдаёт именно такой сертификат — поэтому стандартный клиент **несовместим** с Naive Server.
+
+В форке проверка отключена на всех уровнях, необходимых для обоих транспортов:
+
+| Транспорт           | Файл                                               | Что сделано                                                                                                        |
+| :------------------ | :------------------------------------------------- | :----------------------------------------------------------------------------------------------------------------- |
+| **HTTPS (TCP/TLS)** | `src/net/socket/ssl_client_socket_impl.cc`         | Обход в `DoHandshake`, `DoHandshakeComplete`, `HandleVerifyResult`; `IsAllowedBadCert` всегда разрешает сертификат |
+| **QUIC (UDP)**      | `src/net/third_party/quiche/.../tls_handshaker.cc` | `VerifyCert()` сразу возвращает `ssl_verify_ok`                                                                    |
+| **QUIC (UDP)**      | `src/net/quic/crypto/proof_verifier_chromium.cc`   | `DoVerifyCert` / `DoVerifyCertComplete` пропускают верификацию цепочки                                             |
+
+**Практический эффект:** клиент подключается к `naive_server -mode stealth` по `https://` и `quic://` без ограничений на работу с самоподписанными сертификатами.
+
+**Совместимость:** с `naive_server -mode official` (Let's Encrypt) форк тоже работает. Для official-режима можно использовать и стандартный `klzgrad/naiveproxy`.
+
+### 2. Padding Variant2 — паддинг на всём потоке
+
+Официальный протокол паддинга (**Variant1**, wire-format `"1"`) набрасывает случайные байты только на **первые 8** операций чтения/записи в CONNECT-потоке (`kFirstPaddings = 8`). Дальше трафик идёт без паддинга — так устроены `klzgrad/naiveproxy` и Caddy forwardproxy.
+
+Форк добавляет **Variant2** (`"2"`):
+
+|                           | Variant1 (upstream)         | Variant2 (форк)       |
+| :------------------------ | :-------------------------- | :-------------------- |
+| Область действия          | первые 8 read/write         | **каждая** read/write |
+| Оверхед                   | низкий                      | выше                  |
+| Защита от length-analysis | на старте потока            | на всём потоке        |
+| Сервер                    | `-padding 1` (по умолчанию) | `-padding 2`          |
+
+Изменённые файлы: `naive_protocol.h/cc`, `naive_padding_socket.cc`, `naive_proxy_bin.cc`.
+
+Клиент объявляет серверу поддержку `{Variant1, Variant2, None}`; тип согласуется через заголовки `padding-type-request` / `padding-type-reply`. Для Variant2 на сервере нужен `naive_server -padding 2` — со стандартным Caddy forwardproxy Variant2 **не работает**.
+
+### Когда какой клиент использовать
+
+| Сценарий                                | Клиент                        |
+| :-------------------------------------- | :---------------------------- |
+| Naive Server, stealth (`-mode stealth`) | **Этот форк**                 |
+| Naive Server, stealth + `-padding 2`    | **Этот форк**                 |
+| Naive Server, official (Let's Encrypt)  | Форк или `klzgrad/naiveproxy` |
+| Caddy / HAProxy forwardproxy            | `klzgrad/naiveproxy`          |
+
+### Сборка
+
+Сборка как у upstream — см. [.github/workflows/build.yml](.github/workflows/build.yml). Готовое Docker-окружение для сборки клиента: [naive-server/naiveproxy_in_docker](https://github.com/Haonixao/naive-server/tree/main/naiveproxy_in_docker).
+
+## ⚠️ Предупреждение о безопасности
+
+Этот форк **намеренно менее безопасен**, чем официальный `klzgrad/naiveproxy`, в части **проверки личности сервера**: цепочка CA, срок действия, имя (SNI/CN) — всё отключено для TCP/TLS и QUIC. Клиент примет любой сертификат от того endpoint, с которым завершит handshake.
+
+Это нужно для stealth-режима с самоподписанным сертификатом, но убирает криптографическую гарантию «на другом конце именно мой сервер, а не чужой».
+
+**Какой риск реален:** подмена сервера **в момент подключения** — если DPI, провайдер или ошибка в `host-resolver-rules`/маршруте направит вас на **чужой эмулятор**, клиент подключится к нему без предупреждения. Это impersonation на этапе handshake, не «вклинивание» в уже идущий поток.
+
+**Какой риск не создаётся этим патчем:** вставиться в середину TLS-сессии с **вашим реальным** `naive_server` и читать/менять трафик. Для этого атакующему всё равно нужно терминировать TLS у себя ещё на handshake — просто отключение проверки сертификатов само по себе не открывает канал для mid-stream splice.
+
+**Что остаётся в любом случае:** после успешного handshake трафик шифруется TLS; пассивный прослушиватель линии без участия в handshake его не расшифрует — ни с проверкой сертификатов, ни без неё.
+
+Используйте форк, если принимаете компромисс «доверяю тому, куда меня направили при подключении». Если нужна строгая аутентификация сервера — `naive_server -mode official` с валидным сертификатом и стандартный `klzgrad/naiveproxy`.
+
+---
+
+# NaïveProxy (upstream) ![build workflow](https://github.com/klzgrad/naiveproxy/actions/workflows/build.yml/badge.svg)
 
 NaïveProxy uses Chromium's network stack to camouflage traffic with strong censorship resistence and low detectablility. Reusing Chrome's stack also ensures best practices in performance and security.
 
