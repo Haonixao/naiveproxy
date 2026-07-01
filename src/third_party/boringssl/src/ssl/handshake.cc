@@ -265,84 +265,79 @@ static bool peer_certificates_equal(const SSL_SESSION *session,
 }
 
 enum ssl_verify_result_t ssl_verify_peer_cert(SSL_HANDSHAKE *hs) {
-  return ssl_verify_ok;
-  // SSL *const ssl = hs->ssl;
-  // const SSL_SESSION *prev_session = ssl->s3->established_session.get();
-  // if (prev_session != nullptr) {
-  //   // If renegotiating, the server must not change the server certificate.
-  //   See
-  //   // https://mitls.org/pages/attacks/3SHAKE. We never resume on
-  //   renegotiation,
-  //   // so this check is sufficient to ensure the reported peer certificate
-  //   never
-  //   // changes on renegotiation.
-  //   assert(!ssl->server);
-  //   if (!peer_certificates_equal(hs->new_session.get(), prev_session)) {
-  //     OPENSSL_PUT_ERROR(SSL, SSL_R_SERVER_CERT_CHANGED);
-  //     ssl_send_alert(ssl, SSL3_AL_FATAL, SSL_AD_ILLEGAL_PARAMETER);
-  //     return ssl_verify_invalid;
-  //   }
+  SSL *const ssl = hs->ssl;
+  const SSL_SESSION *prev_session = ssl->s3->established_session.get();
+  if (prev_session != nullptr) {
+    // If renegotiating, the server must not change the server certificate. See
+    // https://mitls.org/pages/attacks/3SHAKE. We never resume on renegotiation,
+    // so this check is sufficient to ensure the reported peer certificate never
+    // changes on renegotiation.
+    assert(!ssl->server);
+    if (!peer_certificates_equal(hs->new_session.get(), prev_session)) {
+      OPENSSL_PUT_ERROR(SSL, SSL_R_SERVER_CERT_CHANGED);
+      ssl_send_alert(ssl, SSL3_AL_FATAL, SSL_AD_ILLEGAL_PARAMETER);
+      return ssl_verify_invalid;
+    }
 
-  //   // The certificate is identical, so we may skip re-verifying the
-  //   // certificate. Since we only authenticated the previous one, copy other
-  //   // authentication from the established session and ignore what was newly
-  //   // received.
-  //   hs->new_session->ocsp_response = UpRef(prev_session->ocsp_response);
-  //   hs->new_session->signed_cert_timestamp_list =
-  //       UpRef(prev_session->signed_cert_timestamp_list);
-  //   hs->new_session->verify_result = prev_session->verify_result;
-  //   return ssl_verify_ok;
-  // }
+    // The certificate is identical, so we may skip re-verifying the
+    // certificate. Since we only authenticated the previous one, copy other
+    // authentication from the established session and ignore what was newly
+    // received.
+    hs->new_session->ocsp_response = UpRef(prev_session->ocsp_response);
+    hs->new_session->signed_cert_timestamp_list =
+        UpRef(prev_session->signed_cert_timestamp_list);
+    hs->new_session->verify_result = prev_session->verify_result;
+    return ssl_verify_ok;
+  }
 
-  // uint8_t alert = SSL_AD_CERTIFICATE_UNKNOWN;
-  // enum ssl_verify_result_t ret;
-  // if (hs->config->custom_verify_callback != nullptr) {
-  //   ret = hs->config->custom_verify_callback(ssl, &alert);
-  //   switch (ret) {
-  //     case ssl_verify_ok:
-  //       hs->new_session->verify_result = X509_V_OK;
-  //       break;
-  //     case ssl_verify_invalid:
-  //       // If |SSL_VERIFY_NONE|, the error is non-fatal, but we keep the
-  //       result. if (hs->config->verify_mode == SSL_VERIFY_NONE) {
-  //         ERR_clear_error();
-  //         ret = ssl_verify_ok;
-  //       }
-  //       hs->new_session->verify_result = X509_V_ERR_APPLICATION_VERIFICATION;
-  //       break;
-  //     case ssl_verify_retry:
-  //       break;
-  //   }
-  // } else {
-  //   ret = ssl->ctx->x509_method->session_verify_cert_chain(
-  //             hs->new_session.get(), hs, &alert)
-  //             ? ssl_verify_ok
-  //             : ssl_verify_invalid;
-  // }
+  uint8_t alert = SSL_AD_CERTIFICATE_UNKNOWN;
+  enum ssl_verify_result_t ret;
+  if (hs->config->custom_verify_callback != nullptr) {
+    ret = hs->config->custom_verify_callback(ssl, &alert);
+    switch (ret) {
+      case ssl_verify_ok:
+        hs->new_session->verify_result = X509_V_OK;
+        break;
+      case ssl_verify_invalid:
+        // If |SSL_VERIFY_NONE|, the error is non-fatal, but we keep the result.
+        if (hs->config->verify_mode == SSL_VERIFY_NONE) {
+          ERR_clear_error();
+          ret = ssl_verify_ok;
+        }
+        hs->new_session->verify_result = X509_V_ERR_APPLICATION_VERIFICATION;
+        break;
+      case ssl_verify_retry:
+        break;
+    }
+  } else {
+    ret = ssl->ctx->x509_method->session_verify_cert_chain(
+              hs->new_session.get(), hs, &alert)
+              ? ssl_verify_ok
+              : ssl_verify_invalid;
+  }
 
-  // if (ret == ssl_verify_invalid) {
-  //   OPENSSL_PUT_ERROR(SSL, SSL_R_CERTIFICATE_VERIFY_FAILED);
-  //   ssl_send_alert(ssl, SSL3_AL_FATAL, alert);
-  // }
+  if (ret == ssl_verify_invalid) {
+    OPENSSL_PUT_ERROR(SSL, SSL_R_CERTIFICATE_VERIFY_FAILED);
+    ssl_send_alert(ssl, SSL3_AL_FATAL, alert);
+  }
 
-  // // Emulate OpenSSL's client OCSP callback. OpenSSL verifies certificates
-  // // before it receives the OCSP, so it needs a second callback for OCSP.
-  // if (ret == ssl_verify_ok && !ssl->server &&
-  //     hs->config->ocsp_stapling_enabled &&
-  //     ssl->ctx->legacy_ocsp_callback != nullptr) {
-  //   int cb_ret =
-  //       ssl->ctx->legacy_ocsp_callback(ssl,
-  //       ssl->ctx->legacy_ocsp_callback_arg);
-  //   if (cb_ret <= 0) {
-  //     OPENSSL_PUT_ERROR(SSL, SSL_R_OCSP_CB_ERROR);
-  //     ssl_send_alert(ssl, SSL3_AL_FATAL,
-  //                    cb_ret == 0 ? SSL_AD_BAD_CERTIFICATE_STATUS_RESPONSE
-  //                                : SSL_AD_INTERNAL_ERROR);
-  //     ret = ssl_verify_invalid;
-  //   }
-  // }
+  // Emulate OpenSSL's client OCSP callback. OpenSSL verifies certificates
+  // before it receives the OCSP, so it needs a second callback for OCSP.
+  if (ret == ssl_verify_ok && !ssl->server &&
+      hs->config->ocsp_stapling_enabled &&
+      ssl->ctx->legacy_ocsp_callback != nullptr) {
+    int cb_ret =
+        ssl->ctx->legacy_ocsp_callback(ssl, ssl->ctx->legacy_ocsp_callback_arg);
+    if (cb_ret <= 0) {
+      OPENSSL_PUT_ERROR(SSL, SSL_R_OCSP_CB_ERROR);
+      ssl_send_alert(ssl, SSL3_AL_FATAL,
+                     cb_ret == 0 ? SSL_AD_BAD_CERTIFICATE_STATUS_RESPONSE
+                                 : SSL_AD_INTERNAL_ERROR);
+      ret = ssl_verify_invalid;
+    }
+  }
 
-  // return ret;
+  return ret;
 }
 
 // Verifies a stored certificate when resuming a session. A few things are
